@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -111,19 +112,24 @@ class NotesWindow(QWidget):
         self.setWindowIcon(tray_icon())
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(380, 560)
+        self.setFixedSize(400, 600)
         self._build_ui()
         self.refresh_notes()
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setContentsMargins(12, 12, 12, 12)
 
         panel = QFrame()
         panel.setObjectName("panel")
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(28)
+        shadow.setOffset(0, 7)
+        shadow.setColor(QColor(18, 70, 105, 55))
+        panel.setGraphicsEffect(shadow)
         outer.addWidget(panel)
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(18, 18, 18, 18)
+        panel_layout.setContentsMargins(22, 22, 22, 22)
 
         self.pages = QStackedWidget()
         panel_layout.addWidget(self.pages)
@@ -132,37 +138,44 @@ class NotesWindow(QWidget):
         self.pages.addWidget(self._build_settings_page())
 
         self.setStyleSheet("""
-            QWidget { font-family: "Segoe UI"; font-size: 14px; color: #202124; }
-            #panel { background: #f7fbfe; border: 1px solid #b8dff3; border-radius: 14px; }
-            QLineEdit, QTextEdit { background: #ffffff; border: 1px solid #b8dff3;
-                border-radius: 9px; padding: 9px; selection-background-color: #0082c9; }
-            QLineEdit:focus, QTextEdit:focus { border: 1px solid #0082c9; }
-            QComboBox { background: #ffffff; color: #005a8c; border: 1px solid #b8dff3;
-                border-radius: 9px; padding: 9px 34px 9px 10px; }
-            QComboBox:hover, QComboBox:focus { border: 1px solid #0082c9; }
-            QComboBox::drop-down { width: 30px; border: none; background: #d9effb;
-                border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
-            QComboBox QAbstractItemView { background: #f7fbfe; color: #005a8c;
-                border: 1px solid #b8dff3; selection-background-color: #0082c9;
-                selection-color: #ffffff; outline: none; padding: 4px; }
-            QListWidget { border: none; background: transparent; outline: none; }
-            QListWidget::item { padding: 11px 9px; border-bottom: 1px solid #dceef8; }
-            QListWidget::item:selected { background: #d9effb; color: #005a8c; border-radius: 7px; }
-            QPushButton { border: none; background: #d9effb; color: #005a8c;
-                border-radius: 8px; padding: 8px 12px; }
-            QPushButton:hover { background: #c5e7f8; }
+            QWidget { font-family: "Segoe UI"; font-size: 14px; color: #193247; }
+            #panel { background: #f8fbff; border: 1px solid #d6e9f7; border-radius: 20px; }
+            QLineEdit, QTextEdit { background: #ffffff; border: 1px solid #d5e5f0;
+                border-radius: 11px; padding: 10px 12px; selection-background-color: #1686d9; }
+            QLineEdit:hover, QTextEdit:hover { border-color: #a9d1ec; }
+            QLineEdit:focus, QTextEdit:focus { border: 2px solid #1686d9; padding: 9px 11px; }
+            QComboBox { background: #ffffff; color: #155a8a; border: 1px solid #d5e5f0;
+                border-radius: 11px; padding: 10px 36px 10px 12px; }
+            QComboBox:hover, QComboBox:focus { border-color: #1686d9; }
+            QComboBox::drop-down { width: 34px; border: none; background: #e9f5fd;
+                border-top-right-radius: 10px; border-bottom-right-radius: 10px; }
+            QComboBox QAbstractItemView { background: #ffffff; color: #155a8a;
+                border: 1px solid #c9e2f3; selection-background-color: #1686d9;
+                selection-color: #ffffff; outline: none; padding: 5px; }
+            QListWidget { border: none; background: transparent; outline: none; padding-top: 5px; }
+            QListWidget::item { margin: 2px 0; padding: 12px 11px; border: none;
+                border-radius: 10px; color: #29485e; }
+            QListWidget::item:hover { background: #edf7fe; color: #0c6dac; }
+            QListWidget::item:selected { background: #dceffd; color: #075d97; }
+            QPushButton { border: 1px solid transparent; background: #e8f4fc; color: #12679f;
+                border-radius: 10px; padding: 9px 14px; font-weight: 600; }
+            QPushButton:hover { background: #d7edfb; border-color: #b9ddf4; }
+            QPushButton:pressed { background: #c8e5f8; }
             QPushButton#addButton, QPushButton#saveButton, QPushButton#settingsSaveButton {
-                background: #0082c9; color: white; font-weight: 600; }
+                background: #1686d9; color: white; border: none; font-weight: 700; }
             QPushButton#addButton:hover, QPushButton#saveButton:hover,
-            QPushButton#settingsSaveButton:hover { background: #006da8; }
-            QPushButton#settingsButton { font-size: 17px; background: #d9effb; }
-            QLabel#title { font-size: 20px; font-weight: 700; }
-            QLabel#empty { color: #777777; }
-            QMessageBox { background: #f7fbfe; }
-            QMessageBox QLabel { background: transparent; color: #202124; min-width: 260px; }
-            QMessageBox QPushButton { background: #0082c9; color: #ffffff;
+            QPushButton#settingsSaveButton:hover { background: #0874c2; }
+            QPushButton#addButton:pressed, QPushButton#saveButton:pressed,
+            QPushButton#settingsSaveButton:pressed { background: #0667ac; }
+            QPushButton#settingsButton { font-size: 17px; background: #edf6fc; }
+            QLabel#title { font-size: 23px; font-weight: 700; color: #123b57; }
+            QLabel#subtitle { font-size: 12px; color: #6c8799; padding-bottom: 3px; }
+            QLabel#empty { color: #7890a0; }
+            QMessageBox { background: #f8fbff; }
+            QMessageBox QLabel { background: transparent; color: #193247; min-width: 260px; }
+            QMessageBox QPushButton { background: #1686d9; color: #ffffff;
                 min-width: 82px; font-weight: 600; }
-            QMessageBox QPushButton:hover { background: #006da8; }
+            QMessageBox QPushButton:hover { background: #0874c2; }
         """)
 
     def _build_list_page(self) -> QWidget:
@@ -181,7 +194,7 @@ class NotesWindow(QWidget):
         add.clicked.connect(self.new_note)
         settings = QPushButton("⚙")
         settings.setObjectName("settingsButton")
-        settings.setFixedSize(38, 38)
+        settings.setFixedSize(50, 38)
         settings.setToolTip("Настройки")
         settings.clicked.connect(self.open_settings)
         header.addWidget(self.list_title)
@@ -190,13 +203,19 @@ class NotesWindow(QWidget):
         header.addWidget(add)
         layout.addLayout(header)
 
+        self.list_subtitle = QLabel("Корневая папка")
+        self.list_subtitle.setObjectName("subtitle")
+        layout.addWidget(self.list_subtitle)
+        layout.addSpacing(5)
+
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Поиск заметок…")
+        self.search.setPlaceholderText("⌕  Поиск в этой папке…")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.filter_notes)
         layout.addWidget(self.search)
 
         self.notes_list = ClickableList()
+        self.notes_list.setSpacing(2)
         self.notes_list.itemClicked.connect(self.open_note)
         layout.addWidget(self.notes_list)
 
@@ -377,6 +396,12 @@ class NotesWindow(QWidget):
     def entry_path(self, name: str) -> str:
         return f"{self.current_dir}/{name}" if self.current_dir else name
 
+    def update_location_header(self):
+        self.list_title.setText(Path(self.current_dir).name if self.current_dir else "Заметки")
+        location = self.current_dir.replace("/", "  ›  ") if self.current_dir else "Корневая папка"
+        storage = "WebDAV" if self.storage_mode == "webdav" else "Локально"
+        self.list_subtitle.setText(f"{storage}  •  {location}")
+
     def test_webdav(self):
         url = self.normalize_webdav_url(self.webdav_url_input.text())
         user = self.webdav_user_input.text().strip()
@@ -450,7 +475,7 @@ class NotesWindow(QWidget):
         self.load_generation += 1
         generation = self.load_generation
         self.notes_list.clear()
-        self.list_title.setText(Path(self.current_dir).name if self.current_dir else "Заметки")
+        self.update_location_header()
         if self.storage_mode == "webdav":
             self.loading_notes = True
             self.empty_label.setText("Загрузка заметок…")
@@ -565,7 +590,7 @@ class NotesWindow(QWidget):
         query = self.search.text().strip().casefold()
         self.notes_list.clear()
 
-        self.list_title.setText(Path(self.current_dir).name if self.current_dir else "Заметки")
+        self.update_location_header()
         if self.current_dir and (not query or "..".startswith(query)):
             item = QListWidgetItem("← ..")
             item.setData(Qt.ItemDataRole.UserRole, "folder-up")
@@ -575,7 +600,7 @@ class NotesWindow(QWidget):
             title = name if kind == "folder" else Path(name).stem
             if query and query not in title.casefold():
                 continue
-            item = QListWidgetItem(f"📁 {title}" if kind == "folder" else title)
+            item = QListWidgetItem(f"📁  {title}" if kind == "folder" else f"▤  {title}")
             item.setData(Qt.ItemDataRole.UserRole, kind)
             item.setData(Qt.ItemDataRole.UserRole + 1, name)
             relative_path = self.entry_path(name)
