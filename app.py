@@ -100,8 +100,9 @@ class NotesWindow(QWidget):
         self.webdav_url = self.config.get("webdav_url", "")
         self.webdav_user = self.config.get("webdav_user", "")
         self.current_name: str | None = None
+        self.current_dir = ""
         self.available_names: set[str] = set()
-        self.note_names: list[str] = []
+        self.note_names: list[tuple[str, str]] = []
         self.loading_notes = False
         self.load_generation = 0
         self.thread_pool = QThreadPool.globalInstance()
@@ -170,8 +171,8 @@ class NotesWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         header = QHBoxLayout()
-        title = QLabel("Заметки")
-        title.setObjectName("title")
+        self.list_title = QLabel("Заметки")
+        self.list_title.setObjectName("title")
         add = QPushButton("+")
         add.setObjectName("addButton")
         add.setFixedSize(38, 38)
@@ -183,7 +184,7 @@ class NotesWindow(QWidget):
         settings.setFixedSize(38, 38)
         settings.setToolTip("Настройки")
         settings.clicked.connect(self.open_settings)
-        header.addWidget(title)
+        header.addWidget(self.list_title)
         header.addStretch()
         header.addWidget(settings)
         header.addWidget(add)
@@ -272,7 +273,7 @@ class NotesWindow(QWidget):
         path_row.addWidget(browse)
         local_layout.addLayout(path_row)
 
-        hint = QLabel("Все файлы .md из этой папки появятся в списке заметок.")
+        hint = QLabel("В списке будут видны подпапки и Markdown-файлы (.md).")
         hint.setObjectName("empty")
         hint.setWordWrap(True)
         local_layout.addWidget(hint)
@@ -373,6 +374,9 @@ class NotesWindow(QWidget):
         response.raise_for_status()
         return response
 
+    def entry_path(self, name: str) -> str:
+        return f"{self.current_dir}/{name}" if self.current_dir else name
+
     def test_webdav(self):
         url = self.normalize_webdav_url(self.webdav_url_input.text())
         user = self.webdav_user_input.text().strip()
@@ -416,6 +420,7 @@ class NotesWindow(QWidget):
                 QMessageBox.warning(self, APP_NAME, f"Не удалось сохранить настройки:\n{exc}")
                 return
             self.storage_mode, self.webdav_url, self.webdav_user = mode, url, user
+            self.current_dir = ""
             self.go_back()
             return
 
@@ -438,14 +443,14 @@ class NotesWindow(QWidget):
             return
         self.notes_dir = new_dir
         self.storage_mode = "local"
+        self.current_dir = ""
         self.go_back()
 
     def refresh_notes(self, *_):
-        if self.storage_mode == "webdav" and self.loading_notes:
-            return
         self.load_generation += 1
         generation = self.load_generation
         self.notes_list.clear()
+        self.list_title.setText(Path(self.current_dir).name if self.current_dir else "Заметки")
         if self.storage_mode == "webdav":
             self.loading_notes = True
             self.empty_label.setText("Загрузка заметок…")
@@ -461,8 +466,9 @@ class NotesWindow(QWidget):
                     "Пароль WebDAV не найден. Сохраните его заново в настройках.", generation
                 )
                 return
+            current_dir = self.current_dir
             worker = NotesLoader(
-                lambda: self.fetch_webdav_names(url, user, password)
+                lambda: self.fetch_webdav_names(url, user, password, current_dir)
             )
             self.active_workers.add(worker)
             worker.signals.finished.connect(
@@ -475,10 +481,17 @@ class NotesWindow(QWidget):
             return
 
         try:
-            paths = sorted(
-                self.notes_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True
+            directory = self.notes_dir / self.current_dir
+            folders = sorted(
+                (("folder", path.name) for path in directory.iterdir() if path.is_dir()),
+                key=lambda entry: entry[1].casefold(),
             )
-            names = [path.name for path in paths]
+            notes = sorted(
+                (("note", path.name) for path in directory.iterdir()
+                 if path.is_file() and path.suffix.lower() == ".md"),
+                key=lambda entry: entry[1].casefold(),
+            )
+            names = folders + notes
         except OSError as exc:
             self.notes_load_failed(str(exc), generation)
             return
@@ -486,10 +499,13 @@ class NotesWindow(QWidget):
         self.notes_loaded(names, generation)
 
     @staticmethod
-    def fetch_webdav_names(url: str, user: str, password: str) -> list[str]:
+    def fetch_webdav_names(
+        url: str, user: str, password: str, current_dir: str
+    ) -> list[tuple[str, str]]:
+        request_url = url + quote(current_dir) + ("/" if current_dir else "")
         response = requests.request(
             "PROPFIND",
-            url,
+            request_url,
             auth=(user, password),
             timeout=15,
             headers={"Depth": "1", "Content-Type": "application/xml; charset=utf-8"},
@@ -498,12 +514,24 @@ class NotesWindow(QWidget):
         )
         response.raise_for_status()
         root = ET.fromstring(response.content)
-        names = []
-        for element in root.findall(".//{DAV:}response/{DAV:}href"):
-            name = unquote(element.text or "").rstrip("/").rsplit("/", 1)[-1]
-            if name.lower().endswith(".md"):
-                names.append(name)
-        return sorted(set(names), key=str.casefold)
+        entries = set()
+        request_path = unquote(urlparse(request_url).path).rstrip("/")
+        for item in root.findall(".//{DAV:}response"):
+            href = item.find("{DAV:}href")
+            if href is None:
+                continue
+            item_path = unquote(urlparse(href.text or "").path).rstrip("/")
+            if item_path == request_path:
+                continue
+            parent_path, _, name = item_path.rpartition("/")
+            if parent_path != request_path or not name or name in {".", ".."}:
+                continue
+            is_folder = item.find(".//{DAV:}resourcetype/{DAV:}collection") is not None
+            if is_folder:
+                entries.add(("folder", name))
+            elif name.lower().endswith(".md"):
+                entries.add(("note", name))
+        return sorted(entries, key=lambda entry: (entry[0] != "folder", entry[1].casefold()))
 
     def finish_notes_worker(self, worker: NotesLoader, names, generation: int):
         self.active_workers.discard(worker)
@@ -518,7 +546,7 @@ class NotesWindow(QWidget):
             return
         self.loading_notes = False
         self.note_names = list(names)
-        self.available_names = set(names)
+        self.available_names = {name for kind, name in names if kind == "note"}
         self.filter_notes()
 
     def notes_load_failed(self, message: str, generation: int):
@@ -537,15 +565,23 @@ class NotesWindow(QWidget):
         query = self.search.text().strip().casefold()
         self.notes_list.clear()
 
-        for name in self.note_names:
-            title = Path(name).stem
+        self.list_title.setText(Path(self.current_dir).name if self.current_dir else "Заметки")
+        if self.current_dir and (not query or "..".startswith(query)):
+            item = QListWidgetItem("← ..")
+            item.setData(Qt.ItemDataRole.UserRole, "folder-up")
+            self.notes_list.addItem(item)
+
+        for kind, name in self.note_names:
+            title = name if kind == "folder" else Path(name).stem
             if query and query not in title.casefold():
                 continue
-            item = QListWidgetItem(title)
-            item.setData(Qt.ItemDataRole.UserRole, name)
+            item = QListWidgetItem(f"📁 {title}" if kind == "folder" else title)
+            item.setData(Qt.ItemDataRole.UserRole, kind)
+            item.setData(Qt.ItemDataRole.UserRole + 1, name)
+            relative_path = self.entry_path(name)
             item.setToolTip(
-                self.webdav_url + quote(name) if self.storage_mode == "webdav"
-                else str(self.notes_dir / name)
+                self.webdav_url + quote(relative_path) if self.storage_mode == "webdav"
+                else str(self.notes_dir / relative_path)
             )
             self.notes_list.addItem(item)
         self.empty_label.setText("Заметок пока нет. Нажмите +, чтобы создать первую.")
@@ -560,16 +596,28 @@ class NotesWindow(QWidget):
         self.note_title.setFocus()
 
     def open_note(self, item: QListWidgetItem):
-        name = item.data(Qt.ItemDataRole.UserRole)
+        kind = item.data(Qt.ItemDataRole.UserRole)
+        if kind == "folder-up":
+            self.current_dir = self.current_dir.rsplit("/", 1)[0] if "/" in self.current_dir else ""
+            self.search.clear()
+            self.refresh_notes()
+            return
+        name = item.data(Qt.ItemDataRole.UserRole + 1)
+        if kind == "folder":
+            self.current_dir = self.entry_path(name)
+            self.search.clear()
+            self.refresh_notes()
+            return
+        relative_path = self.entry_path(name)
         try:
             if self.storage_mode == "webdav":
-                text = self.webdav_request("GET", name).content.decode("utf-8")
+                text = self.webdav_request("GET", relative_path).content.decode("utf-8")
             else:
-                text = (self.notes_dir / name).read_text(encoding="utf-8")
+                text = (self.notes_dir / relative_path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError, requests.RequestException) as exc:
             QMessageBox.warning(self, APP_NAME, f"Не удалось открыть заметку:\n{exc}")
             return
-        self.current_name = name
+        self.current_name = relative_path
         self.note_title.setText(Path(name).stem)
         self.note_text.setPlainText(text)
         self.pages.setCurrentIndex(1)
@@ -589,7 +637,8 @@ class NotesWindow(QWidget):
             return
 
         new_name = f"{filename}.md"
-        if new_name in self.available_names and new_name != self.current_name:
+        new_relative_path = self.entry_path(new_name)
+        if new_name in self.available_names and new_relative_path != self.current_name:
             answer = QMessageBox.question(
                 self, APP_NAME, "Заметка с таким названием уже существует. Заменить её?"
             )
@@ -598,14 +647,14 @@ class NotesWindow(QWidget):
         try:
             if self.storage_mode == "webdav":
                 self.webdav_request(
-                    "PUT", new_name,
+                    "PUT", new_relative_path,
                     data=self.note_text.toPlainText().encode("utf-8"),
                     headers={"Content-Type": "text/markdown; charset=utf-8"},
                 )
-                if self.current_name and self.current_name != new_name:
+                if self.current_name and self.current_name != new_relative_path:
                     self.webdav_request("DELETE", self.current_name)
             else:
-                new_path = self.notes_dir / new_name
+                new_path = self.notes_dir / new_relative_path
                 new_path.write_text(self.note_text.toPlainText(), encoding="utf-8")
                 old_path = self.notes_dir / self.current_name if self.current_name else None
                 if old_path and old_path != new_path and old_path.exists():
@@ -613,7 +662,7 @@ class NotesWindow(QWidget):
         except (OSError, requests.RequestException) as exc:
             QMessageBox.warning(self, APP_NAME, f"Не удалось сохранить заметку:\n{exc}")
             return
-        self.current_name = new_name
+        self.current_name = new_relative_path
         self.go_back()
 
     def go_back(self):
@@ -691,7 +740,5 @@ class QuickNotesApp:
         self.tray.showMessage(APP_NAME, "Приложение запущено и находится в трее.",
                               QSystemTrayIcon.MessageIcon.Information, 2500)
         return self.app.exec()
-
-
 if __name__ == "__main__":
     raise SystemExit(QuickNotesApp().run())
