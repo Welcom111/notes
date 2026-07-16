@@ -4,7 +4,8 @@
 
 Доступно храние в локальной папке или через WebDAV. Меняется в настройках по нажатию ⚙
 
-<img width="385" height="607" alt="H7IdQW6LEl" src="https://github.com/user-attachments/assets/72bffda7-92f0-4b0a-95f9-b4ef2b5acdf8" />
+<img width="394" height="707" alt="image" src="https://github.com/user-attachments/assets/7cc77043-1963-4d4f-9f45-01db1935616a" />
+
 
 
 
