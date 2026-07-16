@@ -1,3 +1,4 @@
+import html
 import json
 import os
 import re
@@ -7,9 +8,21 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
 import keyring
+import markdown
 import requests
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+import yaml
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QUrl, Signal
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QDesktopServices,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -24,9 +37,13 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
+    QTextBrowser,
     QTextEdit,
+    QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -157,6 +174,23 @@ class NotesWindow(QWidget):
                 border-radius: 10px; color: #29485e; }
             QListWidget::item:hover { background: #edf7fe; color: #0c6dac; }
             QListWidget::item:selected { background: #dceffd; color: #075d97; }
+            QSplitter::handle { background: #dcebf5; height: 5px; border-radius: 2px; }
+            QTextBrowser#markdownPreview { background: #ffffff; border: 1px solid #d5e5f0;
+                border-radius: 11px; padding: 12px; }
+            QToolBar#formatToolbar { background: #ffffff; border: 1px solid #d5e5f0;
+                border-radius: 9px; spacing: 2px; padding: 3px; }
+            QToolBar#formatToolbar QToolButton { color: #155a8a; background: transparent;
+                border: none; border-radius: 6px; min-width: 24px; min-height: 24px;
+                padding: 2px 4px; font-weight: 600; }
+            QToolBar#formatToolbar QToolButton:hover { background: #dceffd; color: #075d97; }
+            QToolBar#formatToolbar QToolButton:pressed { background: #c8e5f8; }
+            QMenu { background: #ffffff; color: #155a8a; border: 1px solid #bddcf0;
+                border-radius: 8px; padding: 5px; }
+            QMenu::item { background: transparent; color: #155a8a; border-radius: 6px;
+                padding: 7px 24px 7px 10px; }
+            QMenu::item:selected { background: #dceffd; color: #075d97; }
+            QMenu::item:disabled { color: #8eabbc; }
+            QMenu::separator { height: 1px; background: #d5e5f0; margin: 4px 7px; }
             QPushButton { border: 1px solid transparent; background: #e8f4fc; color: #12679f;
                 border-radius: 10px; padding: 9px 14px; font-weight: 600; }
             QPushButton:hover { background: #d7edfb; border-color: #b9ddf4; }
@@ -250,8 +284,345 @@ class NotesWindow(QWidget):
         self.note_text = QTextEdit()
         self.note_text.setPlaceholderText("Текст заметки…")
         self.note_text.setAcceptRichText(False)
-        layout.addWidget(self.note_text)
+        self.note_text.textChanged.connect(self.update_markdown_preview)
+
+        self.format_toolbar = self.build_format_toolbar()
+        layout.addWidget(self.format_toolbar)
+
+        editor_label = QLabel("MARKDOWN")
+        editor_label.setObjectName("subtitle")
+        preview_label = QLabel("ПРЕДПРОСМОТР")
+        preview_label.setObjectName("subtitle")
+
+        editor_panel = QWidget()
+        editor_layout = QVBoxLayout(editor_panel)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(3)
+        editor_layout.addWidget(editor_label)
+        editor_layout.addWidget(self.note_text)
+
+        self.markdown_preview = QTextBrowser()
+        self.markdown_preview.setObjectName("markdownPreview")
+        self.markdown_preview.setOpenLinks(False)
+        self.markdown_preview.anchorClicked.connect(self.handle_preview_link)
+        self.expanded_details: set[int] = set()
+        self.collapsed_details: set[int] = set()
+        self.detail_blocks: dict[int, tuple[str, str, bool]] = {}
+        self.markdown_preview.document().setDefaultStyleSheet("""
+            body { color: #193247; font-family: 'Segoe UI'; line-height: 1.45; }
+            h1 { color: #0b5f98; font-size: 24px; margin: 8px 0 12px 0; }
+            h2 { color: #126fa9; font-size: 20px; margin: 8px 0; }
+            h3 { color: #247eaf; font-size: 17px; margin: 7px 0; }
+            p { margin: 5px 0; }
+            a { color: #1686d9; text-decoration: none; }
+            blockquote { color: #527489; border-left: 3px solid #67b5e8;
+                margin-left: 4px; padding-left: 10px; }
+            code { color: #075d97; background-color: #e8f4ff; font-family: Consolas;
+                padding: 2px 4px; }
+            pre { color: #d8efff; background-color: #0b4f7a; padding: 12px;
+                font-family: Consolas; white-space: pre-wrap; margin: 8px 0; }
+            pre code { color: #d8efff; background-color: transparent; padding: 0; }
+            table { border-collapse: collapse; margin: 8px 0; }
+            th { color: #075d97; background-color: #e8f4ff; font-weight: bold; }
+            th, td { border: 1px solid #bddcf0; padding: 6px 8px; }
+            ul, ol { margin: 5px 0; }
+            li { margin: 2px 0; }
+            .task-list-item { list-style-type: none; }
+            .footnote { color: #527489; font-size: 12px; }
+            .hll { background-color: #266c93; }
+            .k, .kd, .kn { color: #7fdbff; font-weight: bold; }
+            .s, .s1, .s2 { color: #b8e986; }
+            .c, .c1, .cm { color: #8eb3c7; font-style: italic; }
+            .mi, .mf { color: #ffd580; }
+            .nf, .nc { color: #ffffff; font-weight: bold; }
+            hr { color: #d5e5f0; }
+        """)
+
+        self.properties_toggle = QToolButton()
+        self.properties_toggle.setText("Свойства")
+        self.properties_toggle.setCheckable(True)
+        self.properties_toggle.setChecked(False)
+        self.properties_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.properties_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.properties_toggle.toggled.connect(self.toggle_properties)
+        self.properties_toggle.hide()
+
+        self.properties_preview = QTextBrowser()
+        self.properties_preview.setObjectName("markdownPreview")
+        self.properties_preview.setMaximumHeight(150)
+        self.properties_preview.hide()
+
+        preview_panel = QWidget()
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(3)
+        preview_layout.addWidget(preview_label)
+        preview_layout.addWidget(self.properties_toggle)
+        preview_layout.addWidget(self.properties_preview)
+        preview_layout.addWidget(self.markdown_preview)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(editor_panel)
+        splitter.addWidget(preview_panel)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([230, 230])
+        layout.addWidget(splitter)
+        self.update_markdown_preview()
         return page
+
+    def build_format_toolbar(self) -> QToolBar:
+        toolbar = QToolBar()
+        toolbar.setObjectName("formatToolbar")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+
+        undo = self.add_toolbar_action(toolbar, "↶", "Отменить (Ctrl+Z)", self.note_text.undo)
+        undo.setShortcut(QKeySequence.StandardKey.Undo)
+        redo = self.add_toolbar_action(toolbar, "↷", "Повторить (Ctrl+Y)", self.note_text.redo)
+        redo.setShortcut(QKeySequence.StandardKey.Redo)
+        undo.setEnabled(False)
+        redo.setEnabled(False)
+        self.note_text.undoAvailable.connect(undo.setEnabled)
+        self.note_text.redoAvailable.connect(redo.setEnabled)
+        toolbar.addSeparator()
+
+        self.add_toolbar_action(toolbar, "H1", "Заголовок 1", lambda: self.prefix_selected_lines("# "))
+        self.add_toolbar_action(toolbar, "H2", "Заголовок 2", lambda: self.prefix_selected_lines("## "))
+        self.add_toolbar_action(toolbar, "B", "Жирный (Ctrl+B)", lambda: self.wrap_selection("**", "**", "текст"), "Ctrl+B")
+        self.add_toolbar_action(toolbar, "I", "Курсив (Ctrl+I)", lambda: self.wrap_selection("*", "*", "текст"), "Ctrl+I")
+        self.add_toolbar_action(toolbar, "S", "Зачёркнутый", lambda: self.wrap_selection("~~", "~~", "текст"))
+        self.add_toolbar_action(toolbar, "`", "Встроенный код", lambda: self.wrap_selection("`", "`", "код"))
+        self.add_toolbar_action(toolbar, "🔗", "Ссылка (Ctrl+K)", self.insert_markdown_link, "Ctrl+K")
+        toolbar.addSeparator()
+
+        self.add_toolbar_action(toolbar, "❝", "Цитата", lambda: self.prefix_selected_lines("> "))
+        self.add_toolbar_action(toolbar, "•", "Маркированный список", lambda: self.prefix_selected_lines("- "))
+        self.add_toolbar_action(toolbar, "1.", "Нумерованный список", self.make_numbered_list)
+        self.add_toolbar_action(toolbar, "☑", "Список задач", lambda: self.prefix_selected_lines("- [ ] "))
+        self.add_toolbar_action(toolbar, "</>", "Блок кода", lambda: self.wrap_selection("```\n", "\n```", "код"))
+        self.add_toolbar_action(toolbar, "—", "Горизонтальный разделитель", lambda: self.insert_block("\n---\n"))
+        self.add_toolbar_action(toolbar, "▸", "Раскрывающийся блок", self.insert_details_block)
+        return toolbar
+
+    @staticmethod
+    def add_toolbar_action(
+        toolbar: QToolBar,
+        text: str,
+        tooltip: str,
+        callback,
+        shortcut: str | None = None,
+    ) -> QAction:
+        action = toolbar.addAction(text)
+        action.setToolTip(tooltip)
+        action.triggered.connect(callback)
+        if shortcut:
+            action.setShortcut(QKeySequence(shortcut))
+        return action
+
+    def wrap_selection(self, prefix: str, suffix: str, placeholder: str):
+        cursor = self.note_text.textCursor()
+        selected = cursor.selectedText().replace("\u2029", "\n")
+        content = selected or placeholder
+        start = cursor.selectionStart()
+        cursor.beginEditBlock()
+        cursor.insertText(f"{prefix}{content}{suffix}")
+        cursor.endEditBlock()
+        cursor.setPosition(start + len(prefix))
+        cursor.setPosition(start + len(prefix) + len(content), QTextCursor.MoveMode.KeepAnchor)
+        self.note_text.setTextCursor(cursor)
+        self.note_text.setFocus()
+
+    def prefix_selected_lines(self, prefix: str):
+        cursor = self.note_text.textCursor()
+        selected = cursor.selectedText().replace("\u2029", "\n") or "текст"
+        lines = selected.split("\n")
+        formatted = "\n".join(prefix + line if line else prefix.rstrip() for line in lines)
+        start = cursor.selectionStart()
+        cursor.beginEditBlock()
+        cursor.insertText(formatted)
+        cursor.endEditBlock()
+        cursor.setPosition(start)
+        cursor.setPosition(start + len(formatted), QTextCursor.MoveMode.KeepAnchor)
+        self.note_text.setTextCursor(cursor)
+        self.note_text.setFocus()
+
+    def make_numbered_list(self):
+        cursor = self.note_text.textCursor()
+        selected = cursor.selectedText().replace("\u2029", "\n") or "текст"
+        formatted = "\n".join(
+            f"{index}. {line}" for index, line in enumerate(selected.split("\n"), 1)
+        )
+        cursor.insertText(formatted)
+        self.note_text.setFocus()
+
+    def insert_markdown_link(self):
+        cursor = self.note_text.textCursor()
+        label = cursor.selectedText().replace("\u2029", " ") or "текст ссылки"
+        start = cursor.selectionStart()
+        inserted = f"[{label}](https://)"
+        cursor.insertText(inserted)
+        url_start = start + len(label) + 3
+        cursor.setPosition(url_start)
+        cursor.setPosition(url_start + len("https://"), QTextCursor.MoveMode.KeepAnchor)
+        self.note_text.setTextCursor(cursor)
+        self.note_text.setFocus()
+
+    def insert_block(self, block: str):
+        cursor = self.note_text.textCursor()
+        cursor.insertText(block)
+        self.note_text.setTextCursor(cursor)
+        self.note_text.setFocus()
+
+    def insert_details_block(self):
+        cursor = self.note_text.textCursor()
+        content = cursor.selectedText().replace("\u2029", "\n") or "Содержимое блока"
+        start = cursor.selectionStart()
+        block = f"<details>\n<summary>Подробнее</summary>\n\n{content}\n\n</details>"
+        cursor.insertText(block)
+        summary_start = start + len("<details>\n<summary>")
+        cursor.setPosition(summary_start)
+        cursor.setPosition(summary_start + len("Подробнее"), QTextCursor.MoveMode.KeepAnchor)
+        self.note_text.setTextCursor(cursor)
+        self.note_text.setFocus()
+
+    def update_markdown_preview(self):
+        source = self.note_text.toPlainText()
+        properties, markdown_source = self.extract_properties(source)
+        self.update_properties_preview(properties)
+        if not markdown_source.strip():
+            markdown_source = "*Предпросмотр появится здесь.*"
+        markdown_source = self.render_collapsible_sections(markdown_source)
+        self.markdown_preview.setHtml(self.render_markdown(markdown_source))
+
+    @staticmethod
+    def render_markdown(markdown_source: str) -> str:
+        return markdown.markdown(
+            markdown_source,
+            extensions=[
+                "fenced_code",
+                "tables",
+                "footnotes",
+                "sane_lists",
+                "nl2br",
+                "pymdownx.highlight",
+                "pymdownx.inlinehilite",
+                "pymdownx.tasklist",
+                "pymdownx.tilde",
+            ],
+            extension_configs={
+                "pymdownx.highlight": {
+                    "css_class": "highlight",
+                    "guess_lang": False,
+                    "linenums": False,
+                },
+                "pymdownx.tasklist": {"custom_checkbox": False},
+            },
+            output_format="html",
+        )
+
+    def render_collapsible_sections(self, source: str) -> str:
+        """Render HTML details/summary blocks as clickable QTextBrowser sections."""
+        pattern = re.compile(
+            r"<details(?P<attrs>[^>]*)>\s*"
+            r"<summary>(?P<summary>.*?)</summary>"
+            r"(?P<body>.*?)</details>",
+            re.IGNORECASE | re.DOTALL,
+        )
+        blocks: dict[int, tuple[str, str, bool]] = {}
+
+        def replace(match: re.Match) -> str:
+            index = len(blocks)
+            summary = re.sub(r"<[^>]+>", "", match.group("summary")).strip()
+            body = match.group("body").strip()
+            initially_open = bool(re.search(r"\bopen\b", match.group("attrs"), re.IGNORECASE))
+            blocks[index] = (summary or "Подробнее", body, initially_open)
+            expanded = (
+                index not in self.collapsed_details
+                if initially_open
+                else index in self.expanded_details
+            )
+            arrow = "▼" if expanded else "▶"
+            header = (
+                f'<p><a href="quicknotes-details:{index}">'
+                f'<b>{arrow}&nbsp; {html.escape(summary or "Подробнее")}</b></a></p>'
+            )
+            if not expanded:
+                return header
+            return header + self.render_markdown(body)
+
+        rendered = pattern.sub(replace, source)
+        self.detail_blocks = blocks
+        self.expanded_details.intersection_update(blocks)
+        self.collapsed_details.intersection_update(blocks)
+        return rendered
+
+    def handle_preview_link(self, url: QUrl):
+        if url.scheme() == "quicknotes-details":
+            try:
+                index = int(url.path())
+            except ValueError:
+                return
+            block = self.detail_blocks.get(index)
+            if not block:
+                return
+            if block[2]:
+                if index in self.collapsed_details:
+                    self.collapsed_details.remove(index)
+                else:
+                    self.collapsed_details.add(index)
+            elif index in self.expanded_details:
+                self.expanded_details.remove(index)
+            else:
+                self.expanded_details.add(index)
+            self.update_markdown_preview()
+            return
+        QDesktopServices.openUrl(url)
+
+    @staticmethod
+    def extract_properties(source: str) -> tuple[dict, str]:
+        """Extract Obsidian/Jekyll-style YAML front matter from a note."""
+        match = re.match(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", source, re.DOTALL)
+        if not match:
+            return {}, source
+        try:
+            loaded = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError:
+            return {}, source
+        if not isinstance(loaded, dict):
+            return {}, source
+        return loaded, source[match.end():]
+
+    def update_properties_preview(self, properties: dict):
+        self.properties_toggle.setVisible(bool(properties))
+        if not properties:
+            self.properties_preview.hide()
+            self.properties_toggle.setChecked(False)
+            return
+        rows = []
+        for key, value in properties.items():
+            if isinstance(value, list):
+                value = ", ".join(str(item) for item in value)
+            elif isinstance(value, dict):
+                value = json.dumps(value, ensure_ascii=False)
+            rows.append(
+                f"<tr><th>{html.escape(str(key))}</th>"
+                f"<td>{html.escape(str(value))}</td></tr>"
+            )
+        self.properties_preview.setHtml(
+            "<style>table{border-collapse:collapse;width:100%}"
+            "th,td{border-bottom:1px solid #d5e5f0;padding:5px;text-align:left}"
+            "th{color:#075d97;background:#e8f4ff}</style>"
+            f"<table>{''.join(rows)}</table>"
+        )
+
+    def toggle_properties(self, expanded: bool):
+        self.properties_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self.properties_preview.setVisible(expanded)
 
     def _build_settings_page(self) -> QWidget:
         page = QWidget()

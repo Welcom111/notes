@@ -25,7 +25,7 @@ echo Installing build dependencies...
 if errorlevel 1 goto failed
 
 echo Building QuickNotes.exe...
-%PYTHON_CMD% -m PyInstaller app.py --name QuickNotes --onefile --windowed --clean --noconfirm --collect-submodules keyring.backends
+%PYTHON_CMD% -m PyInstaller app.py --name QuickNotes --onefile --windowed --clean --noconfirm --collect-submodules keyring.backends --collect-submodules markdown --collect-submodules pymdownx
 if errorlevel 1 goto failed
 
 echo.
